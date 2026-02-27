@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>近畿大学附属高等学校 サッカー部 部員名簿</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Noto Sans JP", "Hiragino Kaku Gothic Pro", Meiryo, sans-serif; background: #f5f7fa; color: #222; font-size: 14px; }
+
+  header { background: #1a3a6b; color: #fff; padding: 16px 20px; }
+  header h1 { font-size: 17px; font-weight: 700; }
+  header p { font-size: 12px; color: #aac4e8; margin-top: 4px; }
+
+  .controls { padding: 12px 16px; background: #fff; border-bottom: 1px solid #dde3ec; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .controls input { flex: 1; min-width: 140px; padding: 8px 12px; border: 1px solid #ccd3df; border-radius: 6px; font-size: 14px; }
+  .controls select { padding: 8px 10px; border: 1px solid #ccd3df; border-radius: 6px; font-size: 14px; background: #fff; }
+  .count-bar { padding: 8px 16px; background: #eef2f9; font-size: 12px; color: #555; border-bottom: 1px solid #dde3ec; }
+  .count-bar span { font-weight: 700; color: #1a3a6b; }
+
+  table { width: 100%; border-collapse: collapse; }
+  thead th { background: #1a3a6b; color: #fff; padding: 10px 8px; text-align: left; font-size: 13px; position: sticky; top: 0; z-index: 10; cursor: pointer; white-space: nowrap; user-select: none; }
+  thead th:hover { background: #254f96; }
+  thead th .sort-arrow { font-size: 10px; opacity: 0.6; margin-left: 4px; }
+
+  tbody tr { border-bottom: 1px solid #e5eaf3; }
+  tbody tr:hover { background: #edf2fd; }
+  tbody td { padding: 9px 8px; vertical-align: middle; }
+
+  .grade-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; }
+  .grade-2 { background: #dbeafe; color: #1e40af; }
+  .grade-1 { background: #dcfce7; color: #15803d; }
+  .grade-out { background: #fee2e2; color: #b91c1c; }
+
+  .jersey-cell { font-weight: 700; text-align: center; font-size: 15px; color: #1a3a6b; min-width: 36px; }
+  .name-cell { font-weight: 600; }
+  .pos-cell { font-size: 12px; color: #444; white-space: nowrap; }
+  .origin-cell, .school-cell { font-size: 12px; color: #444; }
+
+  .hidden { display: none !important; }
+
+  #loadingMsg { text-align: center; padding: 40px; color: #888; }
+
+  @media (max-width: 600px) {
+    header h1 { font-size: 15px; }
+    tbody td { padding: 7px 5px; font-size: 12px; }
+    thead th { padding: 8px 5px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚽ 近畿大学附属高等学校 サッカー部 部員名簿</h1>
+  <p id="headerSub">近畿大学附属高等学校（男子）| 読み込み中...</p>
+</header>
+<div class="controls">
+  <input type="text" id="searchInput" placeholder="氏名・ポジション・出身地・出身チームで検索..." oninput="filterTable()">
+  <select id="gradeFilter" onchange="filterTable()">
+    <option value="">全学年</option>
+  </select>
+  <select id="posFilter" onchange="filterTable()">
+    <option value="">全ポジション</option>
+  </select>
+</div>
+<div class="count-bar" id="countBar">
+  読み込み中...
+</div>
+<div style="overflow-x:auto;">
+<table id="rosterTable">
+<thead>
+  <tr>
+    <th onclick="sortTable(0)" data-col="0">背番号 <span class="sort-arrow">↕</span></th>
+    <th onclick="sortTable(1)" data-col="1">氏名 <span class="sort-arrow">↕</span></th>
+    <th onclick="sortTable(2)" data-col="2">学年 <span class="sort-arrow">↕</span></th>
+    <th onclick="sortTable(3)" data-col="3">ポジション <span class="sort-arrow">↕</span></th>
+    <th onclick="sortTable(4)" data-col="4">出身地 <span class="sort-arrow">↕</span></th>
+    <th onclick="sortTable(5)" data-col="5">出身チーム <span class="sort-arrow">↕</span></th>
+  </tr>
+</thead>
+<tbody id="tableBody">
+  <tr><td colspan="6" id="loadingMsg">データを読み込んでいます...</td></tr>
+</tbody>
+</table>
+</div>
+
+<script>
+// ─── CSV Parser ────────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  // Strip BOM if present
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const cols = line.split(',').map(c => c.trim());
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = cols[i] ?? '');
+    return obj;
+  });
+}
+
+// ─── State ─────────────────────────────────────────────────────────────────────
+let allRows = [];       // raw data objects
+let sortCol = -1;
+let sortAsc = true;
+
+// ─── Load CSV ──────────────────────────────────────────────────────────────────
+async function loadCSV() {
+  try {
+    const res = await fetch('./members.csv');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    allRows = parseCSV(text);
+    initFilters();
+    renderTable(allRows);
+    updateCountBar(allRows);
+    document.getElementById('headerSub').textContent =
+      `近畿大学附属高等学校（男子）| 全${allRows.length}名`;
+  } catch (e) {
+    document.getElementById('tableBody').innerHTML =
+      `<tr><td colspan="6" style="color:red;padding:20px">⚠️ CSVの読み込みに失敗しました。members.csv を同じフォルダに置いてください。<br>${e.message}</td></tr>`;
+    document.getElementById('countBar').textContent = '読み込みエラー';
+  }
+}
+
+// ─── Build filter dropdowns from data ─────────────────────────────────────────
+function initFilters() {
+  // Grade filter
+  const grades = [...new Set(allRows.map(r => r['学年']).filter(Boolean))].sort();
+  const gradeSelect = document.getElementById('gradeFilter');
+  grades.forEach(g => {
+    const count = allRows.filter(r => r['学年'] === g).length;
+    const opt = document.createElement('option');
+    opt.value = g;
+    opt.textContent = `${g}生 (${count}名)`;
+    gradeSelect.appendChild(opt);
+  });
+
+  // Position filter — collect unique "base" positions
+  const posSet = new Set();
+  allRows.forEach(r => {
+    const p = (r['ポジション'] || '').trim();
+    if (p && p !== '-') posSet.add(p);
+  });
+  // Extract simple tokens for filter labels (split on / , 、 ・ space)
+  const tokens = new Set();
+  posSet.forEach(p => {
+    p.split(/[\/,、・\s]+/).forEach(t => { if (t) tokens.add(t); });
+  });
+  const posSelect = document.getElementById('posFilter');
+  [...tokens].sort().forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    posSelect.appendChild(opt);
+  });
+}
+
+// ─── Render ────────────────────────────────────────────────────────────────────
+function renderTable(rows) {
+  const tbody = document.getElementById('tableBody');
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#888">該当する部員が見つかりません</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const grade = r['学年'] || '';
+    const gradeNum = grade.replace('年', '');
+    const badgeClass = gradeNum === '2' ? 'grade-2' : gradeNum === '1' ? 'grade-1' : 'grade-out';
+    return `<tr data-jersey="${r['背番号']}" data-pos="${r['ポジション']}" data-grade="${grade}">
+      <td class="jersey-cell">${r['背番号']}</td>
+      <td class="name-cell">${r['氏名']}</td>
+      <td><span class="grade-badge ${badgeClass}">${grade}</span></td>
+      <td class="pos-cell">${r['ポジション']}</td>
+      <td class="origin-cell">${r['出身地']}</td>
+      <td class="school-cell">${r['出身チーム']}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Count bar ─────────────────────────────────────────────────────────────────
+function updateCountBar(visibleRows) {
+  const total = allRows.length;
+  const gradeCounts = {};
+  allRows.forEach(r => {
+    const g = r['学年'] || 'その他';
+    gradeCounts[g] = (gradeCounts[g] || 0) + 1;
+  });
+  const gradeInfo = Object.entries(gradeCounts)
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([g, c]) => `${g}: <span>${c}</span>名`)
+    .join(' &nbsp;|&nbsp; ');
+  document.getElementById('countBar').innerHTML =
+    `表示中: <span id="visibleCount">${visibleRows.length}</span> / ${total} 名 &nbsp;|&nbsp; ${gradeInfo}`;
+}
+
+// ─── Filter ────────────────────────────────────────────────────────────────────
+function filterTable() {
+  const query = document.getElementById('searchInput').value.trim().toLowerCase();
+  const grade = document.getElementById('gradeFilter').value;
+  const pos   = document.getElementById('posFilter').value;
+
+  let filtered = allRows.filter(r => {
+    if (grade && r['学年'] !== grade) return false;
+    if (pos && !(r['ポジション'] || '').includes(pos)) return false;
+    if (query) {
+      const haystack = [r['氏名'], r['ポジション'], r['出身地'], r['出身チーム']]
+        .join(' ').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+
+  if (sortCol >= 0) filtered = doSort(filtered, sortCol, sortAsc);
+  renderTable(filtered);
+  document.getElementById('visibleCount').textContent = filtered.length;
+}
+
+// ─── Sort ──────────────────────────────────────────────────────────────────────
+const COL_KEYS = ['背番号', '氏名', '学年', 'ポジション', '出身地', '出身チーム'];
+
+function doSort(rows, col, asc) {
+  const key = COL_KEYS[col];
+  return [...rows].sort((a, b) => {
+    let va = a[key] || '', vb = b[key] || '';
+    // Numeric sort for jersey number
+    if (col === 0) {
+      const na = parseInt(va), nb = parseInt(vb);
+      if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
+    }
+    return asc ? va.localeCompare(vb, 'ja') : vb.localeCompare(va, 'ja');
+  });
+}
+
+function sortTable(col) {
+  if (sortCol === col) {
+    sortAsc = !sortAsc;
+  } else {
+    sortCol = col;
+    sortAsc = true;
+  }
+  // Update arrow indicators
+  document.querySelectorAll('thead th').forEach((th, i) => {
+    const arrow = th.querySelector('.sort-arrow');
+    if (i === col) arrow.textContent = sortAsc ? '↑' : '↓';
+    else arrow.textContent = '↕';
+  });
+  filterTable();
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────────
+loadCSV();
+</script>
+</body>
+</html>
